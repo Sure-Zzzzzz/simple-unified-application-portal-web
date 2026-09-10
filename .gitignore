@@ -1,0 +1,11 @@
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# 本地排查/测试产物与设计画板不入库（README 为唯一事实标准）
+test-results/
+*.pen
+LOCAL_TEST_COMMANDS.md
