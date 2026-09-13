@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { portalRequest } from './portalAuth';
+import { portalRequest, resolvePortalPresentationMode } from './portalAuth';
 
 describe('portalAuth portalRequest', () => {
   afterEach(() => {
@@ -38,5 +38,26 @@ describe('portalAuth portalRequest', () => {
     });
 
     await expect(portalRequest('/iam/admin/users/2/roles/6', { method: 'POST' })).resolves.toBeUndefined();
+  });
+
+  it('展示模式应只认最长匹配的 PAGE，旧数据和未命中保持标准布局', () => {
+    const application = {
+      applicationCode: 'report', applicationName: '报表中心', description: null, icon: null,
+      routePrefix: '/app/report', entry: '/app/report/', apiBase: null, menuTree: [{
+        code: 'reports', name: '报表', nodeType: 'GROUP' as const, icon: null, route: null,
+        requiredPagePermission: null, presentationMode: 'STANDARD' as const, sortOrder: 1, children: [{
+          code: 'report-root', name: '报表首页', nodeType: 'PAGE' as const, icon: null, route: '/app/report/reports',
+          requiredPagePermission: null, presentationMode: 'STANDARD' as const, sortOrder: 1, children: []
+        }, {
+          code: 'monthly', name: '月度汇报', nodeType: 'PAGE' as const, icon: null, route: '/app/report/reports/monthly',
+          requiredPagePermission: null, presentationMode: 'IMMERSIVE' as const, sortOrder: 2, children: []
+        }]
+      }]
+    };
+
+    expect(resolvePortalPresentationMode(application, '/app/report/reports/monthly/detail')).toBe('IMMERSIVE');
+    expect(resolvePortalPresentationMode(application, '/app/report/reports')).toBe('STANDARD');
+    expect(resolvePortalPresentationMode(application, '/app/report/unknown')).toBe('STANDARD');
+    expect(resolvePortalPresentationMode(undefined, '/app/report/reports/monthly')).toBe('STANDARD');
   });
 });

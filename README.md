@@ -6,12 +6,13 @@
 
 ## 兼容性与发布
 
-- IAM Server：`1.0.x`
-- IAM Contract：`1.0.x`
-- 首次独立发布计划与 IAM Server `1.0.0` 对齐，使用同版本 Git tag `v1.0.0`。
+- IAM Server：`1.1.x`（完整支持递归菜单、默认入口和沉浸展示）
+- IAM Contract：`1.1.x`
+- 兼容 IAM Server `1.0.x` 的平铺 `menus` 回退；该组合不提供递归菜单、默认入口、全局登录首页或沉浸展示。
+- `1.1.0` 对齐 IAM Server `1.1.0` 的 Portal 导航上下文契约。
 - 后续 Portal patch 可独立发布，但必须在 release notes 中声明兼容的 Server、Contract 与已挂载微前端范围。
 
-仓库名使用统一应用门户命名；npm package 保留 `@sure-iam/simple-iam-portal-web`。权威 API 契约由 IAM Server 仓库的 `sdk/auth/iam/contract/` 维护。
+仓库名使用统一应用门户命名；npm package 保留 `@sure-iam/simple-iam-portal-web`。权威 API 契约由 IAM Server 仓库的 `sdk/auth/iam/server/contract/` 维护；不得调用未声明接口。
 
 ## 本地开发
 
@@ -22,7 +23,7 @@ npx pnpm@9.15.4 install
 npx pnpm@9.15.4 run dev
 ```
 
-开发服务器固定使用 `5176`，基路径为 `/app/`。`/iam`、`/oauth2` 代理至 IAM Server，`/micro` 代理至 IAM Admin（`5175`）。开发环境默认通过 Login（`5174`）维持登录入口。
+开发服务器固定使用 `5176`，基路径为 `/app/`。`/iam`、`/oauth2` 代理至 IAM Server；IAM 子应用入口 `/app/iam` 与 `/micro` 代理至 IAM Admin（`5175`）。开发环境默认通过 Login（`5174`）维持登录入口。
 
 ## 验证
 
@@ -31,4 +32,5 @@ npx pnpm@9.15.4 run type-check
 npx pnpm@9.15.4 run lint
 npx pnpm@9.15.4 run test:run
 npx pnpm@9.15.4 run build
+npx pnpm@9.15.4 run test:browser
 ```

@@ -19,6 +19,23 @@ export interface PortalMenuItem {
   sortOrder: number;
 }
 
+export type PortalMenuNodeType = 'GROUP' | 'PAGE';
+
+export type PortalPresentationMode = 'STANDARD' | 'IMMERSIVE';
+
+export interface PortalAccessibleMenuTreeNode {
+  code: string;
+  name: string;
+  nodeType: PortalMenuNodeType;
+  icon: string | null;
+  route: string | null;
+  requiredPagePermission: string | null;
+  /** 旧服务端不返回时按 STANDARD 处理。 */
+  presentationMode?: PortalPresentationMode | null;
+  sortOrder: number;
+  children: PortalAccessibleMenuTreeNode[];
+}
+
 export interface PortalAccessibleApplication {
   applicationCode: string;
   applicationName: string;
@@ -27,7 +44,81 @@ export interface PortalAccessibleApplication {
   routePrefix: string;
   entry: string;
   apiBase: string | null;
-  menus: PortalMenuItem[];
+  /** 1.0 compatibility projection containing PAGE leaves only. */
+  menus?: PortalMenuItem[];
+  /** 1.1 recursive navigation model. */
+  menuTree?: PortalAccessibleMenuTreeNode[];
+  /** 当前用户可访问的应用根路由默认入口。 */
+  defaultEntry?: PortalDefaultEntry | null;
+}
+
+export interface PortalDefaultEntry {
+  pageMenuCode: string;
+  path: string;
+}
+
+export interface PortalNavigationContext {
+  applications: PortalAccessibleApplication[];
+  loginLandingApplicationCode: string | null;
+}
+
+export function getApplicationMenuTree(application: PortalAccessibleApplication): PortalAccessibleMenuTreeNode[] {
+  if (Array.isArray(application.menuTree)) {
+    return application.menuTree;
+  }
+  return (application.menus || []).map(item => ({
+    code: item.code,
+    name: item.name,
+    nodeType: 'PAGE',
+    icon: null,
+    route: item.route,
+    requiredPagePermission: null,
+    presentationMode: 'STANDARD',
+    sortOrder: item.sortOrder,
+    children: []
+  }));
+}
+
+export function flattenApplicationPages(application: PortalAccessibleApplication): PortalMenuItem[] {
+  const pages: PortalMenuItem[] = [];
+  const visit = (nodes: PortalAccessibleMenuTreeNode[]) => {
+    nodes.forEach((node) => {
+      if (node.nodeType === 'PAGE' && node.route) {
+        pages.push({ code: node.code, name: node.name, route: node.route, sortOrder: node.sortOrder });
+      }
+      visit(node.children || []);
+    });
+  };
+  visit(getApplicationMenuTree(application));
+  return pages;
+}
+
+/**
+ * 仅用 IAM 已按当前用户权限裁剪后的 PAGE 菜单决定 Portal 宿主布局。
+ * 路由的最长前缀优先，避免 /reports 抢占 /reports/monthly 等更具体页面。
+ */
+export function resolvePortalPresentationMode(
+  application: PortalAccessibleApplication | undefined,
+  pathname: string
+): PortalPresentationMode {
+  if (!application) {
+    return 'STANDARD';
+  }
+  let matchedRouteLength = -1;
+  let matchedMode: PortalPresentationMode = 'STANDARD';
+  const visit = (nodes: PortalAccessibleMenuTreeNode[]) => {
+    nodes.forEach((node) => {
+      if (node.nodeType === 'PAGE' && node.route
+        && (pathname === node.route || pathname.startsWith(`${node.route}/`))
+        && node.route.length > matchedRouteLength) {
+        matchedRouteLength = node.route.length;
+        matchedMode = node.presentationMode === 'IMMERSIVE' ? 'IMMERSIVE' : 'STANDARD';
+      }
+      visit(node.children || []);
+    });
+  };
+  visit(getApplicationMenuTree(application));
+  return matchedMode;
 }
 
 export interface PortalThemePreference {
@@ -99,6 +190,14 @@ export async function fetchAccessibleApplications(): Promise<PortalAccessibleApp
   return portalRequest('/iam/web/portal/accessible-applications');
 }
 
+export async function fetchPortalNavigationContext(): Promise<PortalNavigationContext> {
+  return portalRequest('/iam/web/portal/navigation-context');
+}
+
+export function isPortalHttpNotFound(error: unknown): boolean {
+  return error instanceof Error && (error as Error & { httpStatus?: number }).httpStatus === 404;
+}
+
 export async function fetchThemePreference(): Promise<PortalThemePreference> {
   return portalRequest('/iam/web/theme-preference');
 }
@@ -167,7 +266,9 @@ export async function portalRequest<T>(url: string, init: RequestInit = {}): Pro
     } catch {
       // 非 JSON 响应体（如网关纯文本错误），保持原文展示
     }
-    throw new Error(message || '请求失败');
+    const error = new Error(message || '请求失败') as Error & { httpStatus?: number };
+    error.httpStatus = response.status;
+    throw error;
   }
   if (response.status === 204) {
     return undefined as T;

@@ -15,8 +15,10 @@ import {
   fetchAccessibleApplications,
   fetchCurrentUser,
   fetchMessages as fetchMessagesApi,
+  fetchPortalNavigationContext,
   fetchThemePreference,
   fetchUnreadMessageCount,
+  isPortalHttpNotFound,
   markAllMessagesRead as markAllMessagesReadApi,
   markMessageRead as markMessageReadApi,
   redirectToLogin,
@@ -25,6 +27,7 @@ import {
   type AuthUser,
   type IamMessage,
   type IamMessagePage,
+  flattenApplicationPages,
   type PortalAccessibleApplication,
   type PortalThemePreference
 } from './api/portalAuth';
@@ -60,6 +63,7 @@ export const portalState = reactive({
   applicationsLoading: false,
   applicationsError: '',
   applications: [] as PortalAccessibleApplication[],
+  loginLandingApplicationCode: null as string | null,
   unreadCount: 0,
   messageVersion: 0,
   messageEventStatus: 'idle' as MessageEventStatus,
@@ -140,11 +144,14 @@ export async function loadAccessibleApplications() {
   portalState.applicationsLoading = true;
   portalState.applicationsError = '';
   try {
-    portalState.applications = await fetchAccessibleApplications();
+    const context = await loadPortalNavigationContext();
+    portalState.applications = context.applications;
+    portalState.loginLandingApplicationCode = context.loginLandingApplicationCode;
     syncActiveApp();
     return true;
   } catch (error) {
     portalState.applications = [];
+    portalState.loginLandingApplicationCode = null;
     if (isUnauthorized(error)) {
       clearAuthenticatedState();
       redirectToLogin();
@@ -154,6 +161,21 @@ export async function loadAccessibleApplications() {
     return false;
   } finally {
     portalState.applicationsLoading = false;
+  }
+}
+
+async function loadPortalNavigationContext() {
+  try {
+    return await fetchPortalNavigationContext();
+  } catch (error) {
+    // 先发布 Portal 再升级服务端时，旧服务的新增端点返回 404，保持 1.0 侧边栏可用。
+    if (!isPortalHttpNotFound(error)) {
+      throw error;
+    }
+    return {
+      applications: await fetchAccessibleApplications(),
+      loginLandingApplicationCode: null
+    };
   }
 }
 
@@ -223,6 +245,7 @@ export function clearAuthenticatedState() {
   portalState.messageActionLoading = false;
   portalState.applications = [];
   portalState.applicationsError = '';
+  portalState.loginLandingApplicationCode = null;
   portalState.unreadCount = 0;
   portalState.activeAppCode = '';
   portalState.activeMenuCode = '';
@@ -347,10 +370,10 @@ export function syncActiveApp(pathname = window.location.pathname) {
     .filter(application => pathname === application.routePrefix || pathname.startsWith(`${application.routePrefix}/`))
     .sort((left, right) => right.routePrefix.length - left.routePrefix.length)[0];
   portalState.activeAppCode = matchedApp?.applicationCode || '';
-  const matchedMenu = matchedApp?.menus
+  const matchedMenu = matchedApp ? flattenApplicationPages(matchedApp)
     .filter(item => pathname === item.route || pathname.startsWith(`${item.route}/`))
-    .sort((left, right) => right.route.length - left.route.length)[0];
-  portalState.activeMenuCode = matchedMenu?.code || matchedApp?.menus[0]?.code || '';
+    .sort((left, right) => right.route.length - left.route.length)[0] : undefined;
+  portalState.activeMenuCode = matchedMenu?.code || (matchedApp ? flattenApplicationPages(matchedApp)[0]?.code : '') || '';
 }
 
 async function loadThemePreference() {

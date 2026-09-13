@@ -44,6 +44,7 @@ describe('portal SSE 未读角标', () => {
     portalState.applicationsLoading = false;
     portalState.applicationsError = '';
     portalState.applications = [];
+    portalState.loginLandingApplicationCode = null;
     portalState.unreadCount = 0;
     portalState.messageEventStatus = 'idle';
     configurePortalNavigator();
@@ -262,6 +263,31 @@ describe('portal SSE 未读角标', () => {
     expect(navigate).toHaveBeenCalledWith('/login?redirect=%2F');
   });
 
+  it('旧 IAM Server 不存在导航上下文端点时应回退平铺菜单接口', async () => {
+    const legacyApplications = [{
+      applicationCode: 'iam', applicationName: 'IAM 管理台', description: null, icon: 'access-control',
+      routePrefix: '/app/iam', entry: '/app/iam/index.html', apiBase: null,
+      menus: [{ code: 'dashboard', name: '仪表盘', route: '/app/iam', sortOrder: 1 }]
+    }];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 404, text: () => Promise.resolve('') })
+      .mockResolvedValueOnce(jsonResponse(legacyApplications));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(loadAccessibleApplications()).resolves.toBe(true);
+
+    expect(portalState.applications).toEqual(legacyApplications);
+    expect(portalState.loginLandingApplicationCode).toBeNull();
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/iam/web/portal/navigation-context', {
+      credentials: 'include',
+      headers: {}
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/iam/web/portal/accessible-applications', {
+      credentials: 'include',
+      headers: {}
+    });
+  });
+
   it('退出会话时应清除站内信列表及操作状态', () => {
     portalState.messages = [{
       id: 1,
@@ -307,7 +333,7 @@ describe('portal SSE 未读角标', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: [] }))
       .mockResolvedValueOnce(jsonResponse({ contractVersion: 1, mode: 'dark', customTokens: {}, updatedAt: '2026-08-12T08:00:00Z' }))
-      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ applications: [], loginLandingApplicationCode: null }))
       .mockResolvedValueOnce(jsonResponse({ headerName: 'X-CSRF-TOKEN', parameterName: '_csrf', token: 'csrf-1' }))
       .mockResolvedValueOnce(jsonResponse({ contractVersion: 1, mode: 'custom', customTokens: {
         primary: '#1D4ED8', primaryHover: '#1E40AF', primaryActive: '#1E3A8A', primaryWeak: '#E0EAFF', primaryText: '#FFFFFF', canvas: '#F4F7FB', surface: '#FFFFFF', surfaceRaised: '#FFFFFF', surfaceSoft: '#EEF3F9', textPrimary: '#182230', textSecondary: '#5F6B7A', textDisabled: '#98A2B3', border: '#D9E1EC', borderStrong: '#B7C4D6', focusRing: '#2563EB', success: '#157347', successBg: '#DEF7E8', warning: '#9A5B00', warningBg: '#FFF4D6', danger: '#B42318', dangerBg: '#FEE4E2', info: '#175CD3', infoBg: '#E8F1FF', overlayScrim: '#0D192F'
@@ -341,7 +367,7 @@ describe('portal SSE 未读角标', () => {
       .mockResolvedValueOnce(jsonResponse({ contractVersion: 1, mode: 'light', customTokens: {
         primary: '#6D28D9', primaryHover: '#5B21B6', primaryActive: '#4C1D95', primaryWeak: '#EDE9FE', primaryText: '#FFFFFF', canvas: '#F5F3FF', surface: '#FFFFFF', surfaceRaised: '#FFFFFF', surfaceSoft: '#EDE9FE', textPrimary: '#1E1B4B', textSecondary: '#64748B', textDisabled: '#98A2B3', border: '#DDD6FE', borderStrong: '#C4B5FD', focusRing: '#7C3AED', success: '#15803D', successBg: '#DCFCE7', warning: '#A16207', warningBg: '#FEF9C3', danger: '#B91C1C', dangerBg: '#FEE2E2', info: '#1D4ED8', infoBg: '#DBEAFE', overlayScrim: '#0D192F'
       }, updatedAt: '2026-09-04T08:00:00Z' }))
-      .mockResolvedValueOnce(jsonResponse([])));
+      .mockResolvedValueOnce(jsonResponse({ applications: [], loginLandingApplicationCode: null })));
 
     await loadCurrentUser();
 

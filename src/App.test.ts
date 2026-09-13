@@ -32,6 +32,10 @@ function successResponse(body: unknown, status = 200) {
   return { ok: true, status, json: () => Promise.resolve(body), text: () => Promise.resolve(JSON.stringify(body)) };
 }
 
+function navigationContext(applications: unknown[], loginLandingApplicationCode: string | null = null) {
+  return { applications, loginLandingApplicationCode };
+}
+
 function mountApp(path = '/app/iam') {
   window.history.pushState({}, '', path);
   const router = createRouter({
@@ -58,6 +62,7 @@ describe('Portal App', () => {
     portalState.applicationsLoading = false;
     portalState.applicationsError = '';
     portalState.applications = [];
+    portalState.loginLandingApplicationCode = null;
     portalState.unreadCount = 0;
     portalState.messageEventStatus = 'idle';
     portalState.theme = 'light';
@@ -76,7 +81,7 @@ describe('Portal App', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
-      .mockResolvedValueOnce(successResponse(accessibleApplications))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
       .mockResolvedValueOnce(successResponse(3));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -100,7 +105,7 @@ describe('Portal App', () => {
       credentials: 'include',
       headers: {}
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(3, '/iam/web/portal/accessible-applications', {
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/iam/web/portal/navigation-context', {
       credentials: 'include',
       headers: {}
     });
@@ -126,13 +131,163 @@ describe('Portal App', () => {
     ]));
   });
 
+  it('应用根节点可独立折叠菜单，图标轨可恢复当前菜单树', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
+      .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
+      .mockResolvedValueOnce(successResponse(0));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const wrapper = mountApp();
+    await flushPromises();
+
+    const applicationRoot = wrapper.get('.app-nav-item');
+    expect(applicationRoot.attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get('.app-subnav').isVisible()).toBe(true);
+    await applicationRoot.trigger('click');
+
+    expect(applicationRoot.attributes('aria-expanded')).toBe('false');
+    expect(wrapper.find('.app-subnav').exists()).toBe(false);
+    expect(localStorage.getItem('simple-iam-portal-expanded-application-menus')).toBe('[]');
+    await applicationRoot.trigger('click');
+
+    const toggle = wrapper.get('.navigation-rail-toggle');
+    expect(toggle.attributes('aria-label')).toBe('收起侧栏');
+    expect(toggle.attributes('aria-pressed')).toBe('false');
+    await toggle.trigger('click');
+
+    expect(wrapper.get('.portal-body').classes()).toContain('sidebar-collapsed');
+    expect(toggle.attributes('aria-label')).toBe('展开侧栏');
+    expect(toggle.attributes('aria-pressed')).toBe('true');
+    expect(localStorage.getItem('simple-iam-portal-navigation-collapsed')).toBe('true');
+    await applicationRoot.trigger('click');
+    expect(wrapper.get('.portal-body').classes()).not.toContain('sidebar-collapsed');
+    wrapper.unmount();
+  });
+
+  it('应优先渲染递归 menuTree，并为深链接自动展开祖先分组', async () => {
+    const treeApplications = [{
+      applicationCode: 'iam', applicationName: '统一身份与访问管理', description: '身份、权限与消息中心', icon: 'access-control',
+      routePrefix: '/app/iam', entry: 'http://localhost:5175', apiBase: null, menus: [],
+      menuTree: [{
+        code: 'directory', name: '目录管理', nodeType: 'GROUP', icon: null, route: null, requiredPagePermission: null, sortOrder: 1,
+        children: [{
+          code: 'iam-users', name: '组织与成员', nodeType: 'PAGE', icon: 'users', route: '/app/iam/users', requiredPagePermission: 'iam:user:page', sortOrder: 1, children: []
+        }]
+      }]
+    }];
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
+      .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
+      .mockResolvedValueOnce(successResponse(navigationContext(treeApplications)))
+      .mockResolvedValueOnce(successResponse(0)));
+
+    const wrapper = mountApp('/app/iam/users');
+    await flushPromises();
+
+    const group = wrapper.get('.app-subnav-group');
+    expect(group.text()).toContain('目录管理');
+    expect(group.attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get('.app-subnav-item.active').text()).toContain('组织与成员');
+    expect(wrapper.find('.app-subnav-item .lucide-folder-tree').exists()).toBe(true);
+    expect(wrapper.find('.app-subnav-item .lucide-users').exists()).toBe(true);
+    await group.trigger('click');
+    expect(group.attributes('aria-expanded')).toBe('false');
+    expect(wrapper.findAll('.app-subnav-item.active')).toHaveLength(0);
+  });
+
+  it('IAM 仪表盘沉浸展示，下钻标准管理页时恢复 Portal 壳', async () => {
+    const immersiveApplications = [{
+      applicationCode: 'iam', applicationName: 'IAM 管理台', description: '身份治理总览', icon: 'access-control',
+      routePrefix: '/app/iam', entry: 'http://localhost:5175', apiBase: null, menus: [], menuTree: [{
+        code: 'dashboard', name: '仪表盘', nodeType: 'PAGE', icon: 'dashboard', route: '/app/iam',
+        requiredPagePermission: null, presentationMode: 'IMMERSIVE', sortOrder: 1, children: []
+      }, {
+        code: 'users', name: '用户管理', nodeType: 'PAGE', icon: 'users', route: '/app/iam/users',
+        requiredPagePermission: 'iam:user:page', presentationMode: 'STANDARD', sortOrder: 2, children: []
+      }]
+    }];
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
+      .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
+      .mockResolvedValueOnce(successResponse(navigationContext(immersiveApplications)))
+      .mockResolvedValueOnce(successResponse(0)));
+
+    const wrapper = mountApp('/app/iam');
+    await flushPromises();
+
+    expect(wrapper.find('.portal-shell').classes()).toContain('portal-shell--immersive');
+    expect(wrapper.find('.portal-topbar').exists()).toBe(false);
+    expect(wrapper.find('.app-sidebar').exists()).toBe(false);
+    expect(wrapper.find('.micro-app-stage').exists()).toBe(true);
+    window.history.pushState({}, '', '/app/iam/users');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    await flushPromises();
+    expect(wrapper.find('.portal-topbar').exists()).toBe(true);
+    expect(wrapper.find('.app-sidebar').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('启动时应恢复已保存的桌面导航折叠状态', async () => {
+    localStorage.setItem('simple-iam-portal-navigation-collapsed', 'true');
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
+      .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
+      .mockResolvedValueOnce(successResponse(0));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const wrapper = mountApp();
+    await flushPromises();
+
+    expect(wrapper.get('.portal-body').classes()).toContain('sidebar-collapsed');
+    expect(wrapper.get('.navigation-rail-toggle').attributes('aria-label')).toBe('展开侧栏');
+    wrapper.unmount();
+  });
+
+  it('多个应用根节点应分别控制自己的模块菜单', async () => {
+    const applications = [...accessibleApplications, {
+      applicationCode: 'aksk',
+      applicationName: 'AKSK 管理',
+      description: '访问密钥管理',
+      icon: 'key-round',
+      routePrefix: '/app/aksk',
+      entry: 'http://localhost:5177',
+      apiBase: '/api',
+      menus: [{ code: 'aksk-clients', name: '客户端管理', route: '/app/aksk/clients', sortOrder: 0 }]
+    }];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
+      .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
+      .mockResolvedValueOnce(successResponse(navigationContext(applications)))
+      .mockResolvedValueOnce(successResponse(0));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const wrapper = mountApp();
+    await flushPromises();
+
+    const roots = wrapper.findAll('.app-nav-item');
+    expect(roots).toHaveLength(2);
+    expect(roots[0].attributes('aria-expanded')).toBe('true');
+    expect(roots[1].attributes('aria-expanded')).toBe('false');
+    await roots[1].trigger('click');
+
+    expect(roots[0].attributes('aria-expanded')).toBe('true');
+    expect(roots[1].attributes('aria-expanded')).toBe('true');
+    await roots[0].trigger('click');
+    expect(roots[0].attributes('aria-expanded')).toBe('false');
+    expect(roots[1].attributes('aria-expanded')).toBe('true');
+    wrapper.unmount();
+  });
+
   it('导航加载失败时应保留已认证用户壳并允许只重试导航', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
       .mockResolvedValueOnce({ ok: false, status: 503, text: () => Promise.resolve('导航暂不可用') })
       .mockResolvedValueOnce(successResponse(0))
-      .mockResolvedValueOnce(successResponse(accessibleApplications))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
       .mockResolvedValueOnce(successResponse(3));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -146,7 +301,7 @@ describe('Portal App', () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain('组织与成员');
-    expect(fetchMock).toHaveBeenNthCalledWith(5, '/iam/web/portal/accessible-applications', {
+    expect(fetchMock).toHaveBeenNthCalledWith(5, '/iam/web/portal/navigation-context', {
       credentials: 'include',
       headers: {}
     });
@@ -157,7 +312,7 @@ describe('Portal App', () => {
       .mockResolvedValueOnce({ ok: false, status: 503, text: () => Promise.resolve('身份服务暂不可用') })
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
-      .mockResolvedValueOnce(successResponse(accessibleApplications))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
       .mockResolvedValueOnce(successResponse(0));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -176,7 +331,7 @@ describe('Portal App', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
-      .mockResolvedValueOnce(successResponse([]))
+      .mockResolvedValueOnce(successResponse(navigationContext([])))
       .mockResolvedValueOnce(successResponse(0));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -195,8 +350,8 @@ describe('Portal App', () => {
       if (url.includes('theme-preference')) {
         return Promise.resolve(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }));
       }
-      if (url.includes('accessible-applications')) {
-        return Promise.resolve(successResponse([]));
+      if (url.includes('navigation-context')) {
+        return Promise.resolve(successResponse(navigationContext([])));
       }
       if (url.includes('unread-count')) {
         return Promise.resolve(successResponse(0));
@@ -235,7 +390,7 @@ describe('Portal App', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
-      .mockResolvedValueOnce(successResponse(accessibleApplications))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
       .mockResolvedValueOnce(successResponse(2))
       .mockResolvedValueOnce(successResponse({ content: [], totalElements: 0, totalPages: 0, page: 1, size: 20, numberOfElements: 0, first: true, last: true, empty: true }));
     vi.stubGlobal('fetch', fetchMock);
@@ -254,7 +409,7 @@ describe('Portal App', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
-      .mockResolvedValueOnce(successResponse(accessibleApplications))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
       .mockResolvedValueOnce(successResponse(0))
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse(4));
@@ -285,7 +440,7 @@ describe('Portal App', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
-      .mockResolvedValueOnce(successResponse(accessibleApplications))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
       .mockResolvedValueOnce(successResponse(0))
       .mockResolvedValueOnce(successResponse({ headerName: 'X-CSRF-TOKEN', parameterName: '_csrf', token: 'csrf-1' }))
       .mockResolvedValueOnce(successResponse({}, 204));
@@ -314,7 +469,7 @@ describe('Portal App', () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
-      .mockResolvedValueOnce(successResponse(accessibleApplications))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
       .mockResolvedValueOnce(successResponse(0)));
 
     const wrapper = mountApp();
@@ -333,7 +488,7 @@ describe('Portal App', () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
-      .mockResolvedValueOnce(successResponse(accessibleApplications))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
       .mockResolvedValueOnce(successResponse(0)));
 
     mountApp('/app/');
@@ -344,11 +499,59 @@ describe('Portal App', () => {
     expect(portalState.activeMenuCode).toBe('iam-dashboard');
   });
 
+  it('Portal 根路径应优先进入全局登录首页应用的静态默认子路径', async () => {
+    const reportApplication = {
+      applicationCode: 'report',
+      applicationName: '报表中心',
+      description: null,
+      icon: 'report',
+      routePrefix: '/app/report',
+      entry: 'http://localhost:5177',
+      apiBase: null,
+      defaultEntry: { pageMenuCode: 'report-home', path: '/reports/overview' },
+      menus: [{ code: 'report-home', name: '报表首页', route: '/app/report/reports', sortOrder: 0 }]
+    };
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
+      .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
+      .mockResolvedValueOnce(successResponse({
+        applications: [accessibleApplications[0], reportApplication],
+        loginLandingApplicationCode: 'report'
+      }))
+      .mockResolvedValueOnce(successResponse(0)));
+
+    mountApp('/app/');
+    await flushPromises();
+
+    expect(window.location.pathname).toBe('/app/report/reports/overview');
+    expect(portalState.activeAppCode).toBe('report');
+    expect(portalState.activeMenuCode).toBe('report-home');
+  });
+
+  it('应用根路径应进入本应用默认入口，已指定的深链保持不变', async () => {
+    const application = {
+      ...accessibleApplications[0],
+      defaultEntry: { pageMenuCode: 'iam-users', path: '/users/invite' }
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
+      .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
+      .mockResolvedValueOnce(successResponse({ applications: [application], loginLandingApplicationCode: null }))
+      .mockResolvedValueOnce(successResponse(0));
+    vi.stubGlobal('fetch', fetchMock);
+
+    mountApp('/app/iam');
+    await flushPromises();
+
+    expect(window.location.pathname).toBe('/app/iam/users/invite');
+    expect(portalState.activeMenuCode).toBe('iam-users');
+  });
+
   it('已指定的应用深链应保持不变', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
-      .mockResolvedValueOnce(successResponse(accessibleApplications))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
       .mockResolvedValueOnce(successResponse(0)));
 
     mountApp('/app/iam/users');
@@ -362,7 +565,7 @@ describe('Portal App', () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(successResponse({ userId: 1, username: 'admin', displayName: '管理员', admin: true, authorities: ['ROLE_iam_admin'] }))
       .mockResolvedValueOnce(successResponse({ contractVersion: 1, mode: 'light', customTokens: {}, updatedAt: null }))
-      .mockResolvedValueOnce(successResponse(accessibleApplications))
+      .mockResolvedValueOnce(successResponse(navigationContext(accessibleApplications)))
       .mockResolvedValueOnce(successResponse(0)));
 
     const wrapper = mountApp('/app/iam');
