@@ -1,7 +1,7 @@
 import { registerMicroApps, start } from 'qiankun';
 import type { RuntimeContext } from '@sure-zzzzzz/simple-frontend-contract';
 import { portalRequest, redirectToLogin } from './api/portalAuth';
-import { getThemeSnapshot, loadCurrentUser, portalState, refreshUnreadCount, themeSubscription, type PortalThemeSnapshot } from './portalState';
+import { getThemeSnapshot, loadAccessibleApplications, loadCurrentUser, portalState, refreshUnreadCount, themeSubscription, type PortalThemeSnapshot } from './portalState';
 
 let started = false;
 
@@ -10,6 +10,7 @@ export interface PortalMicroAppProps extends RuntimeContext {
   currentUser: typeof portalState.currentUser;
   refreshCurrentUser: typeof loadCurrentUser;
   refreshUnreadCount: typeof refreshUnreadCount;
+  refreshPortalNavigation: typeof loadAccessibleApplications;
   onUnauthorized: typeof redirectToLogin;
   routePrefix: string;
   themeSnapshot: PortalThemeSnapshot;
@@ -35,6 +36,7 @@ export function createPortalMicroAppProps(routePrefix: string): PortalMicroAppPr
     },
     refreshCurrentUser: loadCurrentUser,
     refreshUnreadCount,
+    refreshPortalNavigation: loadAccessibleApplications,
     onUnauthorized: redirectToLogin,
     routePrefix,
     themeSnapshot: getThemeSnapshot(),
